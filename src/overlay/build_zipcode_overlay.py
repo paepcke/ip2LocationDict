@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 '''
 Created on Nov 18, 2017
 
@@ -18,6 +19,7 @@ class ZipOverlayer(collections.MutableMapping):
                                   'Data/zip_code_database.csv')
             
     ZIP_INDEX = 0
+    ZIP_TYPE = 1       # 'STANDARD', 'PO BOX', 'UNIQUE', 'MILITARY'
     STATE_INDEX = 5
     COUNTY_INDEX = 6
     LAT_INDEX = 9
@@ -94,7 +96,7 @@ class ZipOverlayer(collections.MutableMapping):
                                            quotechar='"')
             # Copy header unchanged, if present:
             if self.first_line_is_col_header:
-                source_fd.write(nodes_file_reader.next())
+                coded_source.append(nodes_file_reader.next())
                 
             for source_line in nodes_file_reader: 
                 for col in self.columns:
@@ -186,6 +188,10 @@ class ZipOverlayer(collections.MutableMapping):
     #-----------------------    
         
     def get_next_node(self, nodes_file_reader):
+        if self.first_line_is_col_header:
+            # Nodes file's first line are the column
+            # headers. Discard them:
+            nodes_file_reader.next()
         for source_line in nodes_file_reader: 
             for col in self.columns:
                 try:
@@ -211,6 +217,14 @@ class ZipOverlayer(collections.MutableMapping):
         rand_zip_from_state = random.choice(self.state_zips[rand_us_state])
         # Ensure that each zip code is only used once:
         self.state_zips[rand_us_state].remove(rand_zip_from_state)
+        # If we used all of this state's zipcodes, remove
+        # the state from consideration:
+        if len(self.state_zips[rand_us_state]) == 0:
+            del self.state_zips[rand_us_state]
+            # If this was the last state at our disposal,
+            # complain:
+            if len(self.state_zips.keys()) == 0:
+                raise ValueError("Not enough zipcodes in the US to cover this dataset.")
         return rand_zip_from_state
 
     #-----------------------------
@@ -222,7 +236,7 @@ class ZipOverlayer(collections.MutableMapping):
         Read all zip codes from file into memory.
         Build three dicts: 
             self.zipcodes: {'state'  : ...,
-                            'country': ...,
+                            'county' : ...,
                             'lat'    : ...,
                             'long'   : ...
                             }
@@ -233,11 +247,14 @@ class ZipOverlayer(collections.MutableMapping):
             reader = csv.reader(source_fd,
                                 delimiter=self.delimiter,
                                 quotechar='"')
-            # Discard header if present:
-            if self.first_line_is_col_header:
-                reader.next()
+            # Discard header of zip codes dataset:
+            reader.next()
             for line in reader:
                 the_zip   = line[ZipOverlayer.ZIP_INDEX]
+                zip_type  = line[ZipOverlayer.ZIP_TYPE]
+                if zip_type == 'MILITARY':
+                    # No lat/long for military zip codes:
+                    continue
                 state     = line[ZipOverlayer.STATE_INDEX]
                 county    = line[ZipOverlayer.COUNTY_INDEX]
                 lat       = line[ZipOverlayer.LAT_INDEX]
@@ -324,19 +341,24 @@ if __name__ == '__main__':
                         nargs='*',
                         help='''Column numbers of input file where nodes are to be found (zero-based).
                         Default is column 0.''',
-                        dest='columns',
-                        default=0)
+                        default=[])
     parser.add_argument('-d', '--delimiter',
                         help='Column delimiter; default: ","',
-                        dest='delimiter',
                         default=',')
+    parser.add_argument('-f', '--firstLine',
+                        help='If this option is present, the first line of node_file must have column names.',
+                        action='store_true')
+    parser.add_argument('-o', '--outfile',
+                        help='Full output CSV file name if result output desired.',
+                        default=None)
     parser.add_argument('node_file',
                         help='Fully qualified name of file with nodes to overlay onto zip codes',
-                        dest='node_file',
                         default=None)
     args = parser.parse_args();
-    if type(args.columns) == int:
-        args.columns = [args.columns] 
+    args.columns = [int(col_num) for col_num in args.columns] 
     zipOverlayer = ZipOverlayer(args.node_file,
                                 columns=args.columns,
-                                delimiter=args.delimiter)
+                                delimiter=args.delimiter,
+                                firstLineIsColHeader=args.firstLine)
+    if args.outfile is not None:
+        zipOverlayer.export_converted_input(args.outfile)
